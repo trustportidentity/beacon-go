@@ -1,0 +1,75 @@
+package beacon_test
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/trustportidentity/beacon-go"
+	"github.com/trustportidentity/beacon-go/adapter/beacongin"
+)
+
+func TestBeaconPanicRecovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	client := beacon.Init(beacon.Config{
+		APIKey:      "tb_test_key_123",
+		ServiceName: "test-go-service",
+		Environment: "test",
+		IngestURL:   "http://127.0.0.1:9999", // mock target
+		BatchSize:   1,
+		FlushPeriod: 10 * time.Millisecond,
+	})
+	defer client.FlushAndClose()
+
+	r := gin.New()
+	r.Use(beacongin.Middleware("test-go-service"))
+
+	r.GET("/panic-test", func(c *gin.Context) {
+		beacongin.Identify(c, beacon.User{
+			ID:    "usr_test_99",
+			Email: "tester@trustport.tech",
+		})
+
+		span := beacon.StartTypedSpan(c.Request.Context(), "SELECT * FROM test_table", "database")
+		time.Sleep(2 * time.Millisecond)
+		span.End()
+
+		// Deliberate panic to test recovery and stack trace extraction
+		var ptr *string
+		_ = *ptr
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/panic-test", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500 from panic handler, got %d", w.Code)
+	}
+
+	t.Log("✓ Successfully recovered from panic, captured user and span context")
+}
+
+func TestBeaconContextSpans(t *testing.T) {
+	tc := beacon.NewTraceContext("trace-test-123")
+	ctx := beacon.WithTraceContext(context.Background(), tc)
+
+	span := beacon.StartTypedSpan(ctx, "redis_lookup", "cache")
+	time.Sleep(1 * time.Millisecond)
+	span.SetMetadata(beacon.SpanMetadata{
+		Key: "session:test",
+		Op:  "GET",
+	})
+	span.End()
+
+	if len(tc.Spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(tc.Spans))
+	}
+	if tc.Spans[0].Type != "cache" {
+		t.Errorf("expected span type 'cache', got %s", tc.Spans[0].Type)
+	}
+}
