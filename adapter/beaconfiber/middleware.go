@@ -58,7 +58,9 @@ func Middleware(serviceName string) fiber.Handler {
 
 		durationMs := float64(time.Since(start).Microseconds()) / 1000.0
 
-		if client := beacon.GetClient(); client != nil {
+		// Exceptions are always sent regardless of SampleRate - sampling controls ingest
+		// volume for routine traffic, never error visibility.
+		if client := beacon.GetClient(); client != nil && (hasExc || beacon.ShouldSample()) {
 			headers := make(map[string]string)
 			c.Request().Header.VisitAll(func(k, v []byte) {
 				headers[strings.ToLower(string(k))] = string(v)

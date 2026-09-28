@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -23,6 +24,14 @@ type Config struct {
 	Environment string
 	BatchSize   int
 	FlushPeriod time.Duration
+	// SampleRate is the fraction of requests actually traced and sent to Beacon, from 0.0
+	// (none) to 1.0 (all, the default). Lower it in high-traffic services to control ingest
+	// volume and stay within your plan's monthly quota — e.g. 0.1 traces ~10% of requests.
+	// Unsampled requests skip tracing entirely (no queueing, no network call), so this
+	// reduces load on your service too, not just what you send. A value outside (0, 1]
+	// (including the zero value, so an unset Config defaults to fully sampled) is treated
+	// as 1.0.
+	SampleRate float64
 }
 
 type User struct {
@@ -120,6 +129,9 @@ func Init(cfg Config) *Client {
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = "production"
+	}
+	if cfg.SampleRate <= 0 || cfg.SampleRate > 1 {
+		cfg.SampleRate = 1.0
 	}
 
 	c := &Client{
@@ -308,6 +320,19 @@ func GetTraceContext(ctx context.Context) *TraceContext {
 		return tc
 	}
 	return nil
+}
+
+// ShouldSample decides, for one incoming request, whether it should be traced at all -
+// framework adapters (beacongin, beaconfiber, beaconhttp) call this before creating a trace
+// context, so an unsampled request never queues a trace or makes an ingest call. Returns
+// true if no client is configured (Init not called), so a middleware wired up without Init
+// behaves the same as SampleRate 1.0 rather than silently sampling nothing.
+func ShouldSample() bool {
+	c := GetClient()
+	if c == nil || c.cfg.SampleRate >= 1.0 {
+		return true
+	}
+	return rand.Float64() < c.cfg.SampleRate
 }
 
 // TraceID returns the current request's trace ID, or "" if this context isn't inside

@@ -39,4 +39,18 @@ r.POST("/api/v1/charge", func(c *gin.Context) {
 
 Fiber and standard `net/http` adapters live at `adapter/beaconfiber` and `adapter/beaconhttp`.
 
+## Controlling ingest volume
+
+Every trace is already batched (`BatchSize`/`FlushPeriod`) instead of one network call per
+request. In high-traffic services, also set `SampleRate` (0.0–1.0, default 1.0) to trace only
+a fraction of requests — this is what actually keeps you inside your plan's monthly quota.
+Exceptions are always sent regardless of sampling.
+
+```go
+beacon.Init(beacon.Config{
+    // ...
+    SampleRate: 0.2, // trace ~20% of requests
+})
+```
+
 See the full guide at [beacon.trustportidentity.com/help/go](https://beacon.trustportidentity.com/help/go).
