@@ -71,7 +71,9 @@ func Middleware(serviceName string) func(http.Handler) http.Handler {
 				}
 
 				client := beacon.GetClient()
-				if client != nil {
+				// Exceptions are always sent regardless of SampleRate - sampling controls
+				// ingest volume for routine traffic, never error visibility.
+				if client != nil && (hasExc || beacon.ShouldSample()) {
 					headers := make(map[string]string)
 					for k, v := range r.Header {
 						if len(v) > 0 {

@@ -58,7 +58,9 @@ func Middleware(serviceName string) gin.HandlerFunc {
 			}
 
 			client := beacon.GetClient()
-			if client != nil {
+			// Exceptions are always sent regardless of SampleRate - sampling controls
+			// ingest volume for routine traffic, never error visibility.
+			if client != nil && (hasExc || beacon.ShouldSample()) {
 				route := c.FullPath()
 				if route == "" {
 					route = c.Request.URL.Path
