@@ -165,3 +165,33 @@ func TestBreadcrumbs(t *testing.T) {
 		t.Errorf("expected auto-populated timestamp")
 	}
 }
+
+func TestAddJobSpan(t *testing.T) {
+	tc := beacon.NewTraceContext("")
+	ctx := beacon.WithTraceContext(context.Background(), tc)
+
+	beacon.AddJobSpan(ctx, "SendPushNotification", "high-priority", 35.5, 12.0, map[string]string{
+		"recipient_id": "usr_99",
+	})
+
+	if len(tc.Spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(tc.Spans))
+	}
+	s := tc.Spans[0]
+	if s.Type != "job" {
+		t.Errorf("expected span type 'job', got %s", s.Type)
+	}
+	if s.Name != "JOB SendPushNotification" {
+		t.Errorf("expected span name 'JOB SendPushNotification', got %s", s.Name)
+	}
+	if s.Metadata == nil || s.Metadata.Queue != "high-priority" {
+		t.Errorf("expected queue metadata 'high-priority', got %+v", s.Metadata)
+	}
+	if s.Metadata.WaitMs != 12.0 {
+		t.Errorf("expected WaitMs 12.0, got %f", s.Metadata.WaitMs)
+	}
+	if s.Tags["recipient_id"] != "usr_99" {
+		t.Errorf("expected recipient_id usr_99, got %s", s.Tags["recipient_id"])
+	}
+}
+

@@ -70,13 +70,17 @@ type Breadcrumb struct {
 // SpanMetadata carries well-known fields for infrastructure spans (database/cache calls).
 // For anything else, use Span.Tags via CustomSpan.SetTag.
 type SpanMetadata struct {
-	Driver       string `json:"driver,omitempty"`
-	Table        string `json:"table,omitempty"`
-	RowsReturned int    `json:"rows_returned,omitempty"`
-	Hit          *bool  `json:"hit,omitempty"`
-	Key          string `json:"key,omitempty"`
-	Op           string `json:"op,omitempty"`
-	StatusCode   int    `json:"status_code,omitempty"`
+	Driver       string  `json:"driver,omitempty"`
+	Table        string  `json:"table,omitempty"`
+	RowsReturned int     `json:"rows_returned,omitempty"`
+	Hit          *bool   `json:"hit,omitempty"`
+	Key          string  `json:"key,omitempty"`
+	Op           string  `json:"op,omitempty"`
+	StatusCode   int     `json:"status_code,omitempty"`
+	Queue        string  `json:"queue,omitempty"`
+	Connection   string  `json:"connection,omitempty"`
+	Attempts     int     `json:"attempts,omitempty"`
+	WaitMs       float64 `json:"wait_ms,omitempty"`
 }
 
 type Span struct {
@@ -353,6 +357,32 @@ func (tc *TraceContext) AddSpan(s Span) {
 	tc.Spans = append(tc.Spans, s)
 }
 
+// AddJobSpan records a background job or queue execution span with job metadata.
+func (tc *TraceContext) AddJobSpan(jobName, queue string, durationMs, waitMs float64, tags map[string]string) {
+	if tc == nil {
+		return
+	}
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	tags["job"] = jobName
+	if queue != "" {
+		tags["queue"] = queue
+	}
+	span := Span{
+		SpanID:     GenerateSpanID(),
+		Type:       "job",
+		Name:       fmt.Sprintf("JOB %s", jobName),
+		DurationMs: durationMs,
+		Metadata: &SpanMetadata{
+			Queue:  queue,
+			WaitMs: waitMs,
+		},
+		Tags: tags,
+	}
+	tc.AddSpan(span)
+}
+
 func (tc *TraceContext) AddBreadcrumb(b Breadcrumb) {
 	if tc == nil {
 		return
@@ -472,6 +502,13 @@ func InjectTraceHeaders(ctx context.Context, h http.Header) {
 func AddBreadcrumb(ctx context.Context, b Breadcrumb) {
 	if tc := GetTraceContext(ctx); tc != nil {
 		tc.AddBreadcrumb(b)
+	}
+}
+
+// AddJobSpan records a background job or queue execution span into the active trace context.
+func AddJobSpan(ctx context.Context, jobName, queue string, durationMs, waitMs float64, tags map[string]string) {
+	if tc := GetTraceContext(ctx); tc != nil {
+		tc.AddJobSpan(jobName, queue, durationMs, waitMs, tags)
 	}
 }
 
