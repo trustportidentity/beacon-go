@@ -8,6 +8,8 @@ import (
 
 type CustomSpan struct {
 	tc        *TraceContext
+	spanID    string
+	parentID  string
 	spanType  string
 	name      string
 	startTime time.Time
@@ -18,8 +20,15 @@ type CustomSpan struct {
 // StartSpan begins a child span of the current request's trace. spanType defaults to
 // "custom"; use SetMetadata instead for a well-known database/cache span.
 func StartSpan(ctx context.Context, name string) *CustomSpan {
+	tc := GetTraceContext(ctx)
+	parentID := ""
+	if tc != nil {
+		parentID = tc.SpanID
+	}
 	return &CustomSpan{
-		tc:        GetTraceContext(ctx),
+		tc:        tc,
+		spanID:    GenerateSpanID(),
+		parentID:  parentID,
 		spanType:  "custom",
 		name:      name,
 		startTime: time.Now(),
@@ -49,6 +58,10 @@ func (s *CustomSpan) SetTag(key string, value any) *CustomSpan {
 	return s
 }
 
+func (s *CustomSpan) SpanID() string {
+	return s.spanID
+}
+
 func (s *CustomSpan) End() {
 	if s.tc == nil {
 		return
@@ -60,11 +73,13 @@ func (s *CustomSpan) End() {
 	}
 
 	s.tc.AddSpan(Span{
-		Type:       s.spanType,
-		Name:       s.name,
-		StartMs:    startMs,
-		DurationMs: durationMs,
-		Metadata:   s.metadata,
-		Tags:       s.tags,
+		SpanID:       s.spanID,
+		ParentSpanID: s.parentID,
+		Type:         s.spanType,
+		Name:         s.name,
+		StartMs:      startMs,
+		DurationMs:   durationMs,
+		Metadata:     s.metadata,
+		Tags:         s.tags,
 	})
 }

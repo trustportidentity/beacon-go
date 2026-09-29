@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"github.com/trustportidentity/beacon-go"
 )
 
@@ -16,14 +15,12 @@ import (
 func Middleware(serviceName string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		start := time.Now()
-		traceID := c.Get("traceparent")
-		if traceID == "" {
-			traceID = uuid.New().String()
-		}
-
-		tc := beacon.NewTraceContext(traceID)
+		rawTraceparent := c.Get("traceparent")
+		tc := beacon.NewTraceContext(rawTraceparent)
 		ctx := beacon.WithTraceContext(c.UserContext(), tc)
 		c.SetUserContext(ctx)
+
+		c.Set("traceparent", tc.Traceparent())
 
 		var exc *beacon.Exception
 		var hasExc bool
@@ -61,10 +58,11 @@ func Middleware(serviceName string) fiber.Handler {
 		// Exceptions are always sent regardless of SampleRate - sampling controls ingest
 		// volume for routine traffic, never error visibility.
 		if client := beacon.GetClient(); client != nil && (hasExc || beacon.ShouldSample()) {
-			headers := make(map[string]string)
+			rawHeaders := make(map[string]string)
 			c.Request().Header.VisitAll(func(k, v []byte) {
-				headers[strings.ToLower(string(k))] = string(v)
+				rawHeaders[strings.ToLower(string(k))] = string(v)
 			})
+			headers := beacon.SanitizeHeaders(rawHeaders)
 
 			route := c.Route().Path
 			if route == "" {
@@ -72,9 +70,10 @@ func Middleware(serviceName string) fiber.Handler {
 			}
 
 			tr := &beacon.TraceEvent{
-				ID:          traceID,
+				ID:          tc.TraceID,
 				ServiceName: serviceName,
-				TraceID:     traceID,
+				TraceID:     tc.TraceID,
+				ParentSpan:  tc.ParentSpanID,
 				Timestamp:   start,
 				DurationMs:  durationMs,
 				User:        tc.User,
