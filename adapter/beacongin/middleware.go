@@ -9,21 +9,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/trustportidentity/beacon-go"
 )
 
 func Middleware(serviceName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		traceID := c.GetHeader("traceparent")
-		if traceID == "" {
-			traceID = uuid.New().String()
-		}
-
-		tc := beacon.NewTraceContext(traceID)
+		rawTraceparent := c.GetHeader("traceparent")
+		tc := beacon.NewTraceContext(rawTraceparent)
 		ctx := beacon.WithTraceContext(c.Request.Context(), tc)
 		c.Request = c.Request.WithContext(ctx)
+
+		c.Header("traceparent", tc.Traceparent())
 
 		defer func() {
 			durationMs := float64(time.Since(start).Microseconds()) / 1000.0
@@ -66,17 +63,19 @@ func Middleware(serviceName string) gin.HandlerFunc {
 					route = c.Request.URL.Path
 				}
 
-				headers := make(map[string]string)
+				rawHeaders := make(map[string]string)
 				for k, v := range c.Request.Header {
 					if len(v) > 0 {
-						headers[strings.ToLower(k)] = v[0]
+						rawHeaders[strings.ToLower(k)] = v[0]
 					}
 				}
+				headers := beacon.SanitizeHeaders(rawHeaders)
 
 				tr := &beacon.TraceEvent{
-					ID:          traceID,
+					ID:          tc.TraceID,
 					ServiceName: serviceName,
-					TraceID:     traceID,
+					TraceID:     tc.TraceID,
+					ParentSpan:  tc.ParentSpanID,
 					Timestamp:   start,
 					DurationMs:  durationMs,
 					User:        tc.User,

@@ -72,4 +72,64 @@ func TestBeaconContextSpans(t *testing.T) {
 	if tc.Spans[0].Type != "cache" {
 		t.Errorf("expected span type 'cache', got %s", tc.Spans[0].Type)
 	}
+	if tc.Spans[0].SpanID == "" {
+		t.Errorf("expected non-empty span ID")
+	}
+	if tc.Spans[0].ParentSpanID != tc.SpanID {
+		t.Errorf("expected parent span ID %s, got %s", tc.SpanID, tc.Spans[0].ParentSpanID)
+	}
+}
+
+func TestW3CTraceparentParsingAndPropagation(t *testing.T) {
+	incoming := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	tc := beacon.NewTraceContext(incoming)
+
+	if tc.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("expected trace ID 4bf92f3577b34da6a3ce929d0e0e4736, got %s", tc.TraceID)
+	}
+	if tc.ParentSpanID != "00f067aa0ba902b7" {
+		t.Fatalf("expected parent span ID 00f067aa0ba902b7, got %s", tc.ParentSpanID)
+	}
+	if len(tc.SpanID) != 16 {
+		t.Fatalf("expected 16-hex span ID, got %s", tc.SpanID)
+	}
+
+	tp := tc.Traceparent()
+	expectedPrefix := "00-4bf92f3577b34da6a3ce929d0e0e4736-" + tc.SpanID + "-01"
+	if tp != expectedPrefix {
+		t.Fatalf("expected traceparent %s, got %s", expectedPrefix, tp)
+	}
+
+	ctx := beacon.WithTraceContext(context.Background(), tc)
+	req, _ := http.NewRequest("GET", "https://api.internal/service-b", nil)
+	beacon.InjectTraceHeaders(ctx, req.Header)
+
+	if req.Header.Get("traceparent") != expectedPrefix {
+		t.Fatalf("expected injected header %s, got %s", expectedPrefix, req.Header.Get("traceparent"))
+	}
+}
+
+func TestSanitizeHeaders(t *testing.T) {
+	raw := map[string]string{
+		"Authorization":   "Bearer secret_token_xyz",
+		"Cookie":          "session_id=abcdef123456",
+		"X-Api-Key":       "sk_live_998877",
+		"User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X)",
+		"Accept-Encoding": "gzip, deflate",
+	}
+
+	sanitized := beacon.SanitizeHeaders(raw)
+
+	if sanitized["authorization"] != "[Filtered]" {
+		t.Errorf("expected authorization to be filtered, got %s", sanitized["authorization"])
+	}
+	if sanitized["cookie"] != "[Filtered]" {
+		t.Errorf("expected cookie to be filtered, got %s", sanitized["cookie"])
+	}
+	if sanitized["x-api-key"] != "[Filtered]" {
+		t.Errorf("expected x-api-key to be filtered, got %s", sanitized["x-api-key"])
+	}
+	if sanitized["user-agent"] != "Mozilla/5.0 (Macintosh; Intel Mac OS X)" {
+		t.Errorf("expected user-agent to be preserved, got %s", sanitized["user-agent"])
+	}
 }
