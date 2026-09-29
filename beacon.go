@@ -59,6 +59,14 @@ type Exception struct {
 	Stacktrace []StackFrame `json:"stacktrace,omitempty"`
 }
 
+type Breadcrumb struct {
+	Category  string                 `json:"category"` // "log", "http", "query", "navigation", "ui", "user", "error"
+	Message   string                 `json:"message"`
+	Level     string                 `json:"level,omitempty"` // "info", "warning", "error", "debug"
+	Timestamp time.Time              `json:"timestamp"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+}
+
 // SpanMetadata carries well-known fields for infrastructure spans (database/cache calls).
 // For anything else, use Span.Tags via CustomSpan.SetTag.
 type SpanMetadata struct {
@@ -104,6 +112,7 @@ type TraceEvent struct {
 	User         *User           `json:"user,omitempty"`
 	Request      *RequestContext `json:"request,omitempty"`
 	Spans        []Span          `json:"spans"`
+	Breadcrumbs  []Breadcrumb    `json:"breadcrumbs,omitempty"`
 	Exception    *Exception      `json:"exception,omitempty"`
 	HasException bool            `json:"has_exception"`
 }
@@ -335,12 +344,28 @@ type TraceContext struct {
 	StartTime    time.Time
 	User         *User
 	Spans        []Span
+	Breadcrumbs  []Breadcrumb
 }
 
 func (tc *TraceContext) AddSpan(s Span) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	tc.Spans = append(tc.Spans, s)
+}
+
+func (tc *TraceContext) AddBreadcrumb(b Breadcrumb) {
+	if tc == nil {
+		return
+	}
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if b.Timestamp.IsZero() {
+		b.Timestamp = time.Now()
+	}
+	tc.Breadcrumbs = append(tc.Breadcrumbs, b)
+	if len(tc.Breadcrumbs) > 100 {
+		tc.Breadcrumbs = tc.Breadcrumbs[len(tc.Breadcrumbs)-100:]
+	}
 }
 
 func (tc *TraceContext) SetUser(u User) {
@@ -439,6 +464,14 @@ func Traceparent(ctx context.Context) string {
 func InjectTraceHeaders(ctx context.Context, h http.Header) {
 	if tp := Traceparent(ctx); tp != "" && h != nil {
 		h.Set("traceparent", tp)
+	}
+}
+
+// AddBreadcrumb records a breadcrumb (log, database query, HTTP call, UI action)
+// into the current request's trace context.
+func AddBreadcrumb(ctx context.Context, b Breadcrumb) {
+	if tc := GetTraceContext(ctx); tc != nil {
+		tc.AddBreadcrumb(b)
 	}
 }
 
