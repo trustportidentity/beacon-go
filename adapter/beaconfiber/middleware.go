@@ -86,6 +86,7 @@ func Middleware(serviceName string) fiber.Handler {
 					ClientIP:   c.IP(),
 				},
 				Spans:        tc.Spans,
+				Breadcrumbs:  tc.Breadcrumbs,
 				HasException: hasExc,
 				Exception:    exc,
 			}

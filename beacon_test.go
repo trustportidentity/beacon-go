@@ -133,3 +133,35 @@ func TestSanitizeHeaders(t *testing.T) {
 		t.Errorf("expected user-agent to be preserved, got %s", sanitized["user-agent"])
 	}
 }
+
+func TestBreadcrumbs(t *testing.T) {
+	tc := beacon.NewTraceContext("trace-crumb-test")
+	ctx := beacon.WithTraceContext(context.Background(), tc)
+
+	beacon.AddBreadcrumb(ctx, beacon.Breadcrumb{
+		Category: "log",
+		Message:  "User requested payment checkout",
+		Level:    "info",
+	})
+	beacon.AddBreadcrumb(ctx, beacon.Breadcrumb{
+		Category: "query",
+		Message:  "SELECT * FROM accounts WHERE id = 42",
+		Level:    "info",
+		Data: map[string]interface{}{
+			"duration_ms": 1.8,
+		},
+	})
+
+	if len(tc.Breadcrumbs) != 2 {
+		t.Fatalf("expected 2 breadcrumbs, got %d", len(tc.Breadcrumbs))
+	}
+	if tc.Breadcrumbs[0].Category != "log" {
+		t.Errorf("expected category 'log', got %s", tc.Breadcrumbs[0].Category)
+	}
+	if tc.Breadcrumbs[1].Category != "query" {
+		t.Errorf("expected category 'query', got %s", tc.Breadcrumbs[1].Category)
+	}
+	if tc.Breadcrumbs[0].Timestamp.IsZero() {
+		t.Errorf("expected auto-populated timestamp")
+	}
+}

@@ -88,6 +88,7 @@ func Middleware(serviceName string) gin.HandlerFunc {
 						ClientIP:   c.ClientIP(),
 					},
 					Spans:        tc.Spans,
+					Breadcrumbs:  tc.Breadcrumbs,
 					HasException: hasExc,
 					Exception:    exc,
 				}

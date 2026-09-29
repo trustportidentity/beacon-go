@@ -95,6 +95,7 @@ func Middleware(serviceName string) func(http.Handler) http.Handler {
 							ClientIP:   r.RemoteAddr,
 						},
 						Spans:        tc.Spans,
+						Breadcrumbs:  tc.Breadcrumbs,
 						HasException: hasExc,
 						Exception:    exc,
 					}
