@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/trustportidentity/beacon-go"
 )
 
@@ -37,16 +36,13 @@ func Middleware(serviceName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			traceID := r.Header.Get("traceparent")
-			if traceID == "" {
-				traceID = uuid.New().String()
-			}
-
-			tc := beacon.NewTraceContext(traceID)
+			rawTraceparent := r.Header.Get("traceparent")
+			tc := beacon.NewTraceContext(rawTraceparent)
 			ctx := beacon.WithTraceContext(r.Context(), tc)
 			r = r.WithContext(ctx)
 
 			ww := &statusLoggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			ww.Header().Set("traceparent", tc.Traceparent())
 
 			var exc *beacon.Exception
 			var hasExc bool
@@ -74,17 +70,19 @@ func Middleware(serviceName string) func(http.Handler) http.Handler {
 				// Exceptions are always sent regardless of SampleRate - sampling controls
 				// ingest volume for routine traffic, never error visibility.
 				if client != nil && (hasExc || beacon.ShouldSample()) {
-					headers := make(map[string]string)
+					rawHeaders := make(map[string]string)
 					for k, v := range r.Header {
 						if len(v) > 0 {
-							headers[strings.ToLower(k)] = v[0]
+							rawHeaders[strings.ToLower(k)] = v[0]
 						}
 					}
+					headers := beacon.SanitizeHeaders(rawHeaders)
 
 					tr := &beacon.TraceEvent{
-						ID:          traceID,
+						ID:          tc.TraceID,
 						ServiceName: serviceName,
-						TraceID:     traceID,
+						TraceID:     tc.TraceID,
+						ParentSpan:  tc.ParentSpanID,
 						Timestamp:   start,
 						DurationMs:  durationMs,
 						User:        tc.User,

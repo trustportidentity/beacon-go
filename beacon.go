@@ -3,11 +3,14 @@ package beacon
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,12 +72,14 @@ type SpanMetadata struct {
 }
 
 type Span struct {
-	Type       string            `json:"type"` // database, cache, http, job, middleware, custom
-	Name       string            `json:"name"`
-	StartMs    float64           `json:"start_ms"`
-	DurationMs float64           `json:"duration_ms"`
-	Metadata   *SpanMetadata     `json:"metadata,omitempty"`
-	Tags       map[string]string `json:"tags,omitempty"`
+	SpanID       string            `json:"span_id,omitempty"`
+	ParentSpanID string            `json:"parent_span_id,omitempty"`
+	Type         string            `json:"type"` // database, cache, http, job, middleware, custom
+	Name         string            `json:"name"`
+	StartMs      float64           `json:"start_ms"`
+	DurationMs   float64           `json:"duration_ms"`
+	Metadata     *SpanMetadata     `json:"metadata,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
 }
 
 type RequestContext struct {
@@ -93,6 +98,7 @@ type TraceEvent struct {
 	Environment  string          `json:"environment"`
 	Runtime      string          `json:"runtime"`
 	TraceID      string          `json:"trace_id"`
+	ParentSpan   string          `json:"parent_span,omitempty"`
 	Timestamp    time.Time       `json:"timestamp"`
 	DurationMs   float64         `json:"duration_ms"`
 	User         *User           `json:"user,omitempty"`
@@ -277,12 +283,58 @@ const (
 	traceContextKey ctxKey = "beacon_trace_ctx"
 )
 
+// GenerateTraceID generates a standard 16-byte (32 lowercase hex) trace identifier.
+func GenerateTraceID() string {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return strings.ReplaceAll(uuid.New().String(), "-", "")
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// GenerateSpanID generates an 8-byte (16 lowercase hex) span identifier.
+func GenerateSpanID() string {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// ParseTraceparent extracts the trace ID and parent span ID from a W3C traceparent header.
+// Format: {version}-{trace_id}-{parent_id}-{trace_flags}, e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".
+func ParseTraceparent(header string) (traceID string, parentSpanID string, ok bool) {
+	header = strings.TrimSpace(header)
+	if len(header) != 55 {
+		return "", "", false
+	}
+	parts := strings.Split(header, "-")
+	if len(parts) != 4 {
+		return "", "", false
+	}
+	if len(parts[0]) != 2 || len(parts[1]) != 32 || len(parts[2]) != 16 || len(parts[3]) != 2 {
+		return "", "", false
+	}
+	if _, err := hex.DecodeString(parts[1]); err != nil {
+		return "", "", false
+	}
+	if _, err := hex.DecodeString(parts[2]); err != nil {
+		return "", "", false
+	}
+	if parts[1] == "00000000000000000000000000000000" || parts[2] == "0000000000000000" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
 type TraceContext struct {
-	mu        sync.Mutex
-	TraceID   string
-	StartTime time.Time
-	User      *User
-	Spans     []Span
+	mu           sync.Mutex
+	TraceID      string
+	SpanID       string
+	ParentSpanID string
+	StartTime    time.Time
+	User         *User
+	Spans        []Span
 }
 
 func (tc *TraceContext) AddSpan(s Span) {
@@ -297,14 +349,36 @@ func (tc *TraceContext) SetUser(u User) {
 	tc.User = &u
 }
 
-func NewTraceContext(traceID string) *TraceContext {
-	if traceID == "" {
-		traceID = uuid.New().String()
+// Traceparent formats this trace context into a W3C Trace Context traceparent header string.
+func (tc *TraceContext) Traceparent() string {
+	if tc == nil {
+		return ""
 	}
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return fmt.Sprintf("00-%s-%s-01", tc.TraceID, tc.SpanID)
+}
+
+// NewTraceContext initializes a trace context. It parses incoming W3C traceparent headers,
+// or falls back to preserving custom trace identifiers or generating a fresh 32-char hex trace ID.
+func NewTraceContext(headerOrID string) *TraceContext {
+	traceID, parentSpanID, ok := ParseTraceparent(headerOrID)
+	if !ok {
+		if headerOrID != "" {
+			traceID = headerOrID
+		} else {
+			traceID = GenerateTraceID()
+		}
+		parentSpanID = ""
+	}
+	spanID := GenerateSpanID()
+
 	return &TraceContext{
-		TraceID:   traceID,
-		StartTime: time.Now(),
-		Spans:     make([]Span, 0),
+		TraceID:      traceID,
+		SpanID:       spanID,
+		ParentSpanID: parentSpanID,
+		StartTime:    time.Now(),
+		Spans:        make([]Span, 0),
 	}
 }
 
@@ -324,9 +398,7 @@ func GetTraceContext(ctx context.Context) *TraceContext {
 
 // ShouldSample decides, for one incoming request, whether it should be traced at all -
 // framework adapters (beacongin, beaconfiber, beaconhttp) call this before creating a trace
-// context, so an unsampled request never queues a trace or makes an ingest call. Returns
-// true if no client is configured (Init not called), so a middleware wired up without Init
-// behaves the same as SampleRate 1.0 rather than silently sampling nothing.
+// context, so an unsampled request never queues a trace or makes an ingest call.
 func ShouldSample() bool {
 	c := GetClient()
 	if c == nil || c.cfg.SampleRate >= 1.0 {
@@ -343,4 +415,65 @@ func TraceID(ctx context.Context) string {
 		return ""
 	}
 	return tc.TraceID
+}
+
+// SpanID returns the current request's root span ID, or "" if not inside a Beacon-instrumented request.
+func SpanID(ctx context.Context) string {
+	tc := GetTraceContext(ctx)
+	if tc == nil {
+		return ""
+	}
+	return tc.SpanID
+}
+
+// Traceparent returns the W3C traceparent header for the current request, or "".
+func Traceparent(ctx context.Context) string {
+	tc := GetTraceContext(ctx)
+	if tc == nil {
+		return ""
+	}
+	return tc.Traceparent()
+}
+
+// InjectTraceHeaders injects W3C traceparent headers into an outgoing HTTP request Header.
+func InjectTraceHeaders(ctx context.Context, h http.Header) {
+	if tp := Traceparent(ctx); tp != "" && h != nil {
+		h.Set("traceparent", tp)
+	}
+}
+
+var sensitiveHeaderNames = map[string]bool{
+	"authorization":       true,
+	"cookie":              true,
+	"set-cookie":          true,
+	"x-api-key":           true,
+	"api-key":             true,
+	"proxy-authorization": true,
+	"x-auth-token":        true,
+	"x-csrf-token":        true,
+	"x-xsrf-token":        true,
+	"token":               true,
+	"secret":              true,
+	"password":            true,
+}
+
+// SanitizeHeaders redacts sensitive HTTP headers (auth tokens, session cookies, api keys)
+// ensuring no credentials or PII are transmitted in telemetry.
+func SanitizeHeaders(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	sanitized := make(map[string]string, len(headers))
+	for k, v := range headers {
+		lowerK := strings.ToLower(k)
+		if sensitiveHeaderNames[lowerK] ||
+			strings.Contains(lowerK, "token") ||
+			strings.Contains(lowerK, "secret") ||
+			(strings.Contains(lowerK, "key") && lowerK != "key") {
+			sanitized[lowerK] = "[Filtered]"
+		} else {
+			sanitized[lowerK] = v
+		}
+	}
+	return sanitized
 }
