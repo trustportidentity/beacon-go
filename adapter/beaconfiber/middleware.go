@@ -53,6 +53,11 @@ func Middleware(serviceName string) fiber.Handler {
 			}
 		}
 
+		var errorBody beacon.ErrorBodyBuffer
+		errorBody.Write(statusCode, c.Response().Body())
+		exc = beacon.ResolveException(tc, exc, statusCode, c.Method(), c.Path(), errorBody.Bytes())
+		hasExc = exc != nil
+
 		durationMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 		// Exceptions are always sent regardless of SampleRate - sampling controls ingest

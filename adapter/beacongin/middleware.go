@@ -12,6 +12,22 @@ import (
 	"github.com/trustportidentity/beacon-go"
 )
 
+// errorBodyWriter keeps the start of a 5xx body so the trace can say why the request failed.
+type errorBodyWriter struct {
+	gin.ResponseWriter
+	errorBody beacon.ErrorBodyBuffer
+}
+
+func (w *errorBodyWriter) Write(p []byte) (int, error) {
+	w.errorBody.Write(w.Status(), p)
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *errorBodyWriter) WriteString(s string) (int, error) {
+	w.errorBody.Write(w.Status(), []byte(s))
+	return w.ResponseWriter.WriteString(s)
+}
+
 func Middleware(serviceName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -21,6 +37,8 @@ func Middleware(serviceName string) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Header("traceparent", tc.Traceparent())
+		bw := &errorBodyWriter{ResponseWriter: c.Writer}
+		c.Writer = bw
 
 		defer func() {
 			durationMs := float64(time.Since(start).Microseconds()) / 1000.0
@@ -53,6 +71,9 @@ func Middleware(serviceName string) gin.HandlerFunc {
 					Handled: true,
 				}
 			}
+
+			exc = beacon.ResolveException(tc, exc, statusCode, c.Request.Method, c.Request.URL.Path, bw.errorBody.Bytes())
+			hasExc = exc != nil
 
 			client := beacon.GetClient()
 			// Exceptions are always sent regardless of SampleRate - sampling controls

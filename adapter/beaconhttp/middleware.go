@@ -14,11 +14,23 @@ import (
 type statusLoggingResponseWriter struct {
 	http.ResponseWriter
 	statusCode int
+	errorBody  beacon.ErrorBodyBuffer
 }
 
 func (w *statusLoggingResponseWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Write keeps the start of a 5xx body so the trace can say why the request failed.
+func (w *statusLoggingResponseWriter) Write(p []byte) (int, error) {
+	w.errorBody.Write(w.statusCode, p)
+	return w.ResponseWriter.Write(p)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer (Flush, deadlines, hijack).
+func (w *statusLoggingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // Handler wraps next using the service name configured in beacon.Init. Use Middleware
@@ -65,6 +77,9 @@ func Middleware(serviceName string) func(http.Handler) http.Handler {
 					}
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
+
+				exc = beacon.ResolveException(tc, exc, ww.statusCode, r.Method, r.URL.Path, ww.errorBody.Bytes())
+				hasExc = exc != nil
 
 				client := beacon.GetClient()
 				// Exceptions are always sent regardless of SampleRate - sampling controls

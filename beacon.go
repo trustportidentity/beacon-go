@@ -349,6 +349,8 @@ type TraceContext struct {
 	User         *User
 	Spans        []Span
 	Breadcrumbs  []Breadcrumb
+	// Exception is the handled error reported with CaptureError, if any.
+	Exception *Exception
 }
 
 func (tc *TraceContext) AddSpan(s Span) {
