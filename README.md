@@ -39,6 +39,35 @@ r.POST("/api/v1/charge", func(c *gin.Context) {
 
 Fiber and standard `net/http` adapters live at `adapter/beaconfiber` and `adapter/beaconhttp`.
 
+## Beacon AI Defender (Cloud Firewall & Threat Mitigation)
+
+Beacon AI Defender provides in-memory firewall inspection (<100ns) and real-time decision syncing to automatically drop banned IPs, adversarial AI hacking agents, and exploit attempts before they reach your application:
+
+```go
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/trustportidentity/beacon-go/defender"
+    "github.com/trustportidentity/beacon-go/adapter/beacongin"
+)
+
+// Initialize Defender enforcer
+def, err := defender.New(defender.Config{
+    ServerURL:   "https://beacon-api.trustportidentity.com",
+    APIKey:      "tb_live_...",
+    ServiceName: "payment-gateway",
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer def.Close()
+
+r := gin.Default()
+// Mount Defender firewall middleware before business logic
+r.Use(beacongin.DefenderMiddleware(def))
+```
+
+Adapters for `net/http` and Fiber are available in `adapter/beaconhttp.DefenderMiddleware` and `adapter/beaconfiber.DefenderMiddleware`.
+
 ## Controlling ingest volume
 
 Every trace is already batched (`BatchSize`/`FlushPeriod`) instead of one network call per
